@@ -2,13 +2,17 @@ package config
 
 import (
 	"fmt"
+	"os"
+
 	"github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
-	"os"
 )
 
 const (
 	defaultOrdersNumber = 10
+
+	// MnemonicEnv overrides wallet.mnemonic so the secret can stay out of the config file
+	MnemonicEnv = "TRADEBIN_MNEMONIC"
 )
 
 // LoadConfig reads a file, validates its existence, and parses it into the provided structure
@@ -53,5 +57,17 @@ func addDefaults(cfg *Config) {
 
 	if cfg.Orders.Sell == 0 {
 		cfg.Orders.Sell = defaultOrdersNumber
+	}
+
+	if cfg.LiquidityPool.MinReservePct == 0 {
+		cfg.LiquidityPool.MinReservePct = defaultMinReservePct
+	}
+
+	if cfg.LiquidityPool.MaxReservePct == 0 {
+		cfg.LiquidityPool.MaxReservePct = defaultMaxReservePct
+	}
+
+	if mnemonic := os.Getenv(MnemonicEnv); mnemonic != "" {
+		cfg.Wallet.Mnemonic = mnemonic
 	}
 }

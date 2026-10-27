@@ -2,6 +2,9 @@ package app
 
 import (
 	"fmt"
+	"math/rand"
+	"strconv"
+
 	"tradebin-mm/app/internal"
 
 	basev1beta1 "cosmossdk.io/api/cosmos/base/v1beta1"
@@ -14,7 +17,21 @@ import (
 const (
 	ubzeDenom   = "ubze"
 	ubzeReserve = 300000
+
+	// minSwapAmount is the smallest input (in the input denom's micro-units) worth broadcasting
+	minSwapAmount = 1000
 )
+
+type haltChecker interface {
+	IsDenomHalted(denom string) (bool, error)
+}
+
+type lpVolumeConfig interface {
+	GetId() string
+	GetSlippage() float64
+	GetMinReservePct() float64
+	GetMaxReservePct() float64
+}
 
 type lpProvider interface {
 	GetLiquidityPool(poolId string) (*tradebinTypes.LiquidityPool, error)
@@ -30,8 +47,11 @@ type LPVolumeMaker struct {
 	balanceProvider addressBalanceProvider
 	addrProvider    addressProvider
 	broadcaster     lpBroadcaster
+	haltChecker     haltChecker
 	poolId          string
 	slippage        math.LegacyDec
+	minReservePct   float64
+	maxReservePct   float64
 }
 
 func NewLPVolumeMaker(
@@ -40,15 +60,19 @@ func NewLPVolumeMaker(
 	balanceProvider addressBalanceProvider,
 	addrProvider addressProvider,
 	broadcaster lpBroadcaster,
-	poolId string,
-	slippage float64,
+	haltChecker haltChecker,
+	cfg lpVolumeConfig,
 ) (*LPVolumeMaker, error) {
-	if logger == nil || lpProvider == nil || balanceProvider == nil || addrProvider == nil || broadcaster == nil {
+	if logger == nil || lpProvider == nil || balanceProvider == nil || addrProvider == nil || broadcaster == nil || haltChecker == nil || cfg == nil {
 		return nil, internal.NewInvalidDependenciesErr("NewLPVolumeMaker")
 	}
 
-	if poolId == "" {
+	if cfg.GetId() == "" {
 		return nil, fmt.Errorf("pool id is required")
+	}
+
+	if cfg.GetMinReservePct() <= 0 || cfg.GetMinReservePct() > cfg.GetMaxReservePct() {
+		return nil, fmt.Errorf("invalid reserve pct bounds")
 	}
 
 	return &LPVolumeMaker{
@@ -57,8 +81,11 @@ func NewLPVolumeMaker(
 		balanceProvider: balanceProvider,
 		addrProvider:    addrProvider,
 		broadcaster:     broadcaster,
-		poolId:          poolId,
-		slippage:        math.LegacyMustNewDecFromStr(fmt.Sprintf("%f", slippage)),
+		haltChecker:     haltChecker,
+		poolId:          cfg.GetId(),
+		slippage:        math.LegacyMustNewDecFromStr(fmt.Sprintf("%f", cfg.GetSlippage())),
+		minReservePct:   cfg.GetMinReservePct(),
+		maxReservePct:   cfg.GetMaxReservePct(),
 	}, nil
 }
 
@@ -77,6 +104,15 @@ func (lv *LPVolumeMaker) MakeVolume() error {
 		WithField("base", lp.Base).
 		WithField("quote", lp.Quote).
 		Debug("fetched liquidity pool")
+
+	halted, err := lv.isPoolHalted(lp)
+	if err != nil {
+		return fmt.Errorf("failed to check halted denoms: %w", err)
+	}
+	if halted {
+		l.Warn("a pool denom is halted, skipping swap")
+		return nil
+	}
 
 	balances, err := lv.balanceProvider.GetAddressBalances(lv.addrProvider.GetAddress().String())
 	if err != nil {
@@ -114,6 +150,10 @@ func (lv *LPVolumeMaker) MakeVolume() error {
 		Info("broadcasting swap")
 
 	err = lv.broadcaster.BroadcastBlock([]sdk.Msg{msg})
+	if internal.IsDenomHaltedErr(err) {
+		l.WithError(err).Warn("swap refused: a pool denom is halted")
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("failed to broadcast swap: %w", err)
 	}
@@ -123,49 +163,79 @@ func (lv *LPVolumeMaker) MakeVolume() error {
 	return nil
 }
 
-func (lv *LPVolumeMaker) determineSwap(lp *tradebinTypes.LiquidityPool, baseBalance, quoteBalance math.Int, l logrus.FieldLogger) (sdk.Coin, string) {
-	hasBase := !baseBalance.IsNil() && baseBalance.IsPositive()
-	hasQuote := !quoteBalance.IsNil() && quoteBalance.IsPositive()
+func (lv *LPVolumeMaker) isPoolHalted(lp *tradebinTypes.LiquidityPool) (bool, error) {
+	for _, denom := range []string{lp.Base, lp.Quote} {
+		halted, err := lv.haltChecker.IsDenomHalted(denom)
+		if err != nil {
+			return false, err
+		}
+		if halted {
+			return true, nil
+		}
+	}
 
-	if !hasBase && !hasQuote {
-		l.Warn("no balance for either LP denom")
+	return false, nil
+}
+
+// determineSwap swaps from the side holding more value (valued in the pool's quote denom at spot price),
+// sized at a random fraction in [minReservePct, maxReservePct] of that side's pool reserve and capped by
+// the wallet balance, so inventory drifts back towards 50/50 and the pool price only moves a little per swap.
+func (lv *LPVolumeMaker) determineSwap(lp *tradebinTypes.LiquidityPool, baseBalance, quoteBalance math.Int, l logrus.FieldLogger) (sdk.Coin, string) {
+	if !lp.ReserveBase.IsPositive() || !lp.ReserveQuote.IsPositive() {
+		l.Warn("pool has an empty reserve")
 		return sdk.Coin{}, ""
 	}
 
-	var swapDenom, outputDenom string
-	var swapAmount math.Int
-
-	if hasBase && hasQuote {
-		// Both have balance — swap the one that is NOT ubze
-		if lp.Base == ubzeDenom {
-			swapDenom = lp.Quote
-			outputDenom = lp.Base
-			swapAmount = quoteBalance
-		} else {
-			swapDenom = lp.Base
-			outputDenom = lp.Quote
-			swapAmount = baseBalance
-		}
-	} else if hasBase {
-		swapDenom = lp.Base
-		outputDenom = lp.Quote
-		swapAmount = baseBalance
-	} else {
-		swapDenom = lp.Quote
-		outputDenom = lp.Base
-		swapAmount = quoteBalance
+	availBase := lv.spendable(lp.Base, baseBalance)
+	availQuote := lv.spendable(lp.Quote, quoteBalance)
+	if !availBase.IsPositive() && !availQuote.IsPositive() {
+		l.Warn("no spendable balance for either LP denom")
+		return sdk.Coin{}, ""
 	}
 
-	// If swapping ubze, reserve some for fees
-	if swapDenom == ubzeDenom {
-		swapAmount = swapAmount.SubRaw(ubzeReserve)
-		if !swapAmount.IsPositive() {
-			l.Info("ubze balance too low after reserving for fees")
-			return sdk.Coin{}, ""
-		}
+	baseValue := math.LegacyNewDecFromInt(availBase).MulInt(lp.ReserveQuote).QuoInt(lp.ReserveBase)
+
+	swapDenom, outputDenom, available, reserveIn := lp.Base, lp.Quote, availBase, lp.ReserveBase
+	if math.LegacyNewDecFromInt(availQuote).GT(baseValue) {
+		swapDenom, outputDenom, available, reserveIn = lp.Quote, lp.Base, availQuote, lp.ReserveQuote
+	}
+
+	pct := lv.minReservePct + rand.Float64()*(lv.maxReservePct-lv.minReservePct)
+	pctDec, err := math.LegacyNewDecFromStr(strconv.FormatFloat(pct, 'f', 12, 64))
+	if err != nil {
+		l.WithError(err).Error("invalid reserve pct")
+		return sdk.Coin{}, ""
+	}
+
+	swapAmount := pctDec.MulInt(reserveIn).TruncateInt()
+	if swapAmount.GT(available) {
+		swapAmount = available
+	}
+
+	if swapAmount.LT(math.NewInt(minSwapAmount)) {
+		l.WithField("amount", swapAmount.String()).WithField("denom", swapDenom).Info("swap amount below minimum, skipping")
+		return sdk.Coin{}, ""
 	}
 
 	return sdk.NewCoin(swapDenom, swapAmount), outputDenom
+}
+
+// spendable is the balance usable for a swap: ubze keeps a reserve for fees
+func (lv *LPVolumeMaker) spendable(denom string, balance math.Int) math.Int {
+	if balance.IsNil() || !balance.IsPositive() {
+		return math.ZeroInt()
+	}
+
+	if denom != ubzeDenom {
+		return balance
+	}
+
+	left := balance.SubRaw(ubzeReserve)
+	if !left.IsPositive() {
+		return math.ZeroInt()
+	}
+
+	return left
 }
 
 func (lv *LPVolumeMaker) getReserves(lp *tradebinTypes.LiquidityPool, inputDenom string) (reserveIn, reserveOut math.Int) {

@@ -1,8 +1,10 @@
 package app
 
 import (
+	"errors"
 	"fmt"
 	"time"
+
 	"tradebin-mm/app/data_provider"
 	"tradebin-mm/app/dto"
 	"tradebin-mm/app/internal"
@@ -15,7 +17,18 @@ import (
 
 const (
 	cancelOrdersDelta = 5
+
+	haltedCancelLimit = 500
 )
+
+// ErrMarketHalted is returned by FillOrderBook when a market denom is halted: the wallet's orders were
+// cancelled (exit only) and nothing else should trade on the market this cycle.
+var ErrMarketHalted = errors.New("market denom is halted")
+
+type ordersMarketConfig interface {
+	data_provider.MarketProvider
+	GetPoolId() string
+}
 
 type balanceProvider interface {
 	GetAddressBalancesForMarket(address string, marketId data_provider.MarketProvider) (*dto.MarketBalance, error)
@@ -50,12 +63,14 @@ type ordersConfig interface {
 
 type Orders struct {
 	ordersConfig ordersConfig
-	marketConfig data_provider.MarketProvider
+	marketConfig ordersMarketConfig
 
 	balanceProvider balanceProvider
 	addressProvider addressProvider
 	ordersProvider  ordersProvider
 	orderSubmitter  orderSubmitter
+	haltChecker     haltChecker
+	poolProvider    lpProvider
 
 	l logrus.FieldLogger
 }
@@ -63,13 +78,15 @@ type Orders struct {
 func NewOrdersFiller(
 	l logrus.FieldLogger,
 	ordersConfig ordersConfig,
-	marketConfig data_provider.MarketProvider,
+	marketConfig ordersMarketConfig,
 	balanceProvider balanceProvider,
 	addressProvider addressProvider,
 	ordersProvider ordersProvider,
 	orderSubmitter orderSubmitter,
+	haltChecker haltChecker,
+	poolProvider lpProvider,
 ) (*Orders, error) {
-	if ordersConfig == nil || marketConfig == nil || balanceProvider == nil || addressProvider == nil || ordersProvider == nil || orderSubmitter == nil {
+	if l == nil || ordersConfig == nil || marketConfig == nil || balanceProvider == nil || addressProvider == nil || ordersProvider == nil || orderSubmitter == nil || haltChecker == nil || poolProvider == nil {
 		return nil, internal.NewInvalidDependenciesErr("NewOrdersFiller")
 	}
 
@@ -80,11 +97,67 @@ func NewOrdersFiller(
 		addressProvider: addressProvider,
 		ordersProvider:  ordersProvider,
 		orderSubmitter:  orderSubmitter,
+		haltChecker:     haltChecker,
+		poolProvider:    poolProvider,
 		l:               l.WithField("service", "OrdersFiller"),
 	}, nil
 }
 
+// FillOrderBook keeps the wallet's ladder on the market. A halted market denom (queried up front, or a
+// tx refused with tradebin error 4017) cancels the wallet's orders and returns ErrMarketHalted.
 func (v *Orders) FillOrderBook() error {
+	halted, err := v.isMarketHalted()
+	if err != nil {
+		return fmt.Errorf("failed to check halted denoms: %v", err)
+	}
+
+	if halted {
+		return v.exitHaltedMarket()
+	}
+
+	err = v.fillOrderBook()
+	if internal.IsDenomHaltedErr(err) {
+		return v.exitHaltedMarket()
+	}
+
+	return err
+}
+
+func (v *Orders) isMarketHalted() (bool, error) {
+	for _, denom := range []string{v.marketConfig.GetBaseDenom(), v.marketConfig.GetQuoteDenom()} {
+		halted, err := v.haltChecker.IsDenomHalted(denom)
+		if err != nil {
+			return false, err
+		}
+		if halted {
+			return true, nil
+		}
+	}
+
+	return false, nil
+}
+
+func (v *Orders) exitHaltedMarket() error {
+	v.l.WithField("market", v.marketConfig.GetMarketId()).Warn("market denom is halted: cancelling own orders and skipping this cycle")
+
+	myBuys, mySells, err := v.ordersProvider.GetAddressActiveOrders(v.marketConfig.GetMarketId(), v.addressProvider.GetAddress().String(), haltedCancelLimit)
+	if err != nil {
+		return errors.Join(ErrMarketHalted, fmt.Errorf("failed to get address active orders: %v", err))
+	}
+
+	all := append(myBuys, mySells...)
+	if len(all) == 0 {
+		return ErrMarketHalted
+	}
+
+	if err := v.cancelOrders(all, len(all)); err != nil {
+		return errors.Join(ErrMarketHalted, err)
+	}
+
+	return ErrMarketHalted
+}
+
+func (v *Orders) fillOrderBook() error {
 	balances, err := v.balanceProvider.GetMarketBalance(v.addressProvider.GetAddress().String(), v.marketConfig)
 	if err != nil {
 		return fmt.Errorf("failed to get balances: %v", err)
@@ -94,6 +167,16 @@ func (v *Orders) FillOrderBook() error {
 	myBuys, mySells, err := v.ordersProvider.GetAddressActiveOrders(balances.MarketId, v.addressProvider.GetAddress().String(), requiredOrders*2)
 	if err != nil {
 		return fmt.Errorf("failed to get address active orders: %v", err)
+	}
+
+	if v.marketConfig.GetPoolId() != "" {
+		if !v.shouldFillOrderBook(balances.MarketId) {
+			v.l.Info("should not reprice order book yet. hold back.")
+
+			return nil
+		}
+
+		return v.repriceToPool(myBuys, mySells)
 	}
 
 	myOrdersCount := len(myBuys) + len(mySells)
@@ -379,4 +462,152 @@ func (v *Orders) shouldFillOrderBook(marketId string) bool {
 	}
 
 	return time.Now().Unix()-history.ExecutedAt > int64(v.ordersConfig.GetHoldBackSeconds())
+}
+
+// repriceToPool moves the wallet's ladder onto the targets derived from the pool spot price: own orders
+// off the targets are cancelled in one tx and the missing targets are placed in one tx.
+func (v *Orders) repriceToPool(myBuys, mySells []tradebinTypes.Order) error {
+	reference, err := v.poolReferencePrice()
+	if err != nil {
+		return err
+	}
+	v.l.WithField("reference_price", reference.String()).Debug("pool reference price")
+
+	sellTargets, buyTargets := v.targetPrices(reference)
+
+	sellCancels, sellMissing := v.diffOrders(mySells, sellTargets)
+	buyCancels, buyMissing := v.diffOrders(myBuys, buyTargets)
+
+	cancels := append(sellCancels, buyCancels...)
+	if len(cancels) > 0 {
+		v.l.Infof("cancelling %d off-target orders", len(cancels))
+		if err := v.orderSubmitter.CancelOrders(cancels); err != nil {
+			return fmt.Errorf("failed to cancel off-target orders: %w", err)
+		}
+	}
+
+	var creates []*tradebinTypes.MsgCreateOrder
+	creates = append(creates, v.createMsgs(tradebinTypes.OrderTypeSell, sellMissing)...)
+	creates = append(creates, v.createMsgs(tradebinTypes.OrderTypeBuy, buyMissing)...)
+	if len(creates) == 0 {
+		v.l.Debug("order book already on target")
+		return nil
+	}
+
+	v.l.Infof("placing %d orders", len(creates))
+	if err := v.orderSubmitter.AddOrders(creates); err != nil {
+		return fmt.Errorf("failed to place orders: %w", err)
+	}
+
+	return nil
+}
+
+// poolReferencePrice is the pool spot price expressed as the market's quote per base, truncated to step
+func (v *Orders) poolReferencePrice() (*math.LegacyDec, error) {
+	lp, err := v.poolProvider.GetLiquidityPool(v.marketConfig.GetPoolId())
+	if err != nil {
+		return nil, fmt.Errorf("failed to get liquidity pool: %w", err)
+	}
+	if lp == nil {
+		return nil, fmt.Errorf("liquidity pool %s not found", v.marketConfig.GetPoolId())
+	}
+
+	base, quote := v.marketConfig.GetBaseDenom(), v.marketConfig.GetQuoteDenom()
+	if (lp.Base != base || lp.Quote != quote) && (lp.Base != quote || lp.Quote != base) {
+		return nil, fmt.Errorf("liquidity pool %s does not trade the market denoms", lp.Id)
+	}
+
+	if !lp.ReserveBase.IsPositive() || !lp.ReserveQuote.IsPositive() {
+		return nil, fmt.Errorf("liquidity pool %s has an empty reserve", lp.Id)
+	}
+
+	var spot math.LegacyDec
+	if lp.Base == quote {
+		spot = math.LegacyNewDecFromInt(lp.ReserveBase).QuoInt(lp.ReserveQuote)
+	} else {
+		spot = math.LegacyNewDecFromInt(lp.ReserveQuote).QuoInt(lp.ReserveBase)
+	}
+
+	reference, err := internal.TruncateToStep(&spot, v.ordersConfig.GetPriceStepDec())
+	if err != nil {
+		return nil, err
+	}
+
+	if !reference.IsPositive() {
+		return nil, fmt.Errorf("pool price %s is below one step", spot.String())
+	}
+
+	return reference, nil
+}
+
+// targetPrices builds the ladder around reference: sells at reference + step*(half+i), buys at
+// reference - step*(half+1+i), where half is spread_steps/2. Non-positive buy prices are dropped.
+func (v *Orders) targetPrices(reference *math.LegacyDec) (sells, buys []math.LegacyDec) {
+	step := *v.ordersConfig.GetPriceStepDec()
+	half := v.ordersConfig.GetSpreadSteps().QuoRaw(2).Int64()
+
+	for i := 0; i < v.ordersConfig.GetSellNo(); i++ {
+		sells = append(sells, reference.Add(step.MulInt64(half+int64(i))))
+	}
+
+	for i := 0; i < v.ordersConfig.GetBuyNo(); i++ {
+		price := reference.Sub(step.MulInt64(half + 1 + int64(i)))
+		if !price.IsPositive() {
+			break
+		}
+		buys = append(buys, price)
+	}
+
+	return sells, buys
+}
+
+// diffOrders returns cancel messages for own orders not on a target (or duplicating one) and the targets with no own order
+func (v *Orders) diffOrders(own []tradebinTypes.Order, targets []math.LegacyDec) ([]*tradebinTypes.MsgCancelOrder, []math.LegacyDec) {
+	wanted := make(map[string]struct{}, len(targets))
+	for _, t := range targets {
+		wanted[priceKey(t)] = struct{}{}
+	}
+
+	covered := make(map[string]struct{}, len(targets))
+	var cancels []*tradebinTypes.MsgCancelOrder
+	for _, order := range own {
+		key := priceKey(math.LegacyMustNewDecFromStr(order.Price))
+		_, isTarget := wanted[key]
+		_, isCovered := covered[key]
+		if isTarget && !isCovered {
+			covered[key] = struct{}{}
+			continue
+		}
+
+		cancels = append(cancels, tradebinTypes.NewMsgCancelOrder(v.addressProvider.GetAddress().String(), order.MarketId, order.Id, order.OrderType))
+	}
+
+	var missing []math.LegacyDec
+	for _, t := range targets {
+		if _, ok := covered[priceKey(t)]; !ok {
+			missing = append(missing, t)
+		}
+	}
+
+	return cancels, missing
+}
+
+func (v *Orders) createMsgs(orderType string, prices []math.LegacyDec) []*tradebinTypes.MsgCreateOrder {
+	msgs := make([]*tradebinTypes.MsgCreateOrder, 0, len(prices))
+	for _, price := range prices {
+		amount := internal.MustRandomInt(v.ordersConfig.GetOrderMinAmount(), v.ordersConfig.GetOrderMaxAmount())
+		msgs = append(msgs, tradebinTypes.NewMsgCreateOrder(
+			v.addressProvider.GetAddress().String(),
+			orderType,
+			amount.String(),
+			priceKey(price),
+			v.marketConfig.GetMarketId(),
+		))
+	}
+
+	return msgs
+}
+
+func priceKey(price math.LegacyDec) string {
+	return internal.TrimAmountTrailingZeros(price.String())
 }

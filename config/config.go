@@ -34,6 +34,8 @@ func (w *Wallet) Validate() error {
 type Market struct {
 	BaseDenom  string `yaml:"base_denom"`
 	QuoteDenom string `yaml:"quote_denom"`
+	// PoolId optionally anchors the order book to a liquidity pool's spot price
+	PoolId string `yaml:"pool_id"`
 }
 
 func (m *Market) Validate() error {
@@ -54,6 +56,10 @@ func (m *Market) GetBaseDenom() string {
 
 func (m *Market) GetQuoteDenom() string {
 	return m.QuoteDenom
+}
+
+func (m *Market) GetPoolId() string {
+	return m.PoolId
 }
 
 func (m *Market) GetMarketId() string {
@@ -133,10 +139,35 @@ type Logging struct {
 	Level string `yaml:"level"`
 }
 
+const (
+	defaultMinReservePct = 0.001
+	defaultMaxReservePct = 0.005
+	maxReservePctLimit   = 0.05
+)
+
 type LiquidityPool struct {
 	Id       string  `yaml:"id"`
 	Slippage float64 `yaml:"slippage"`
 	Interval int     `yaml:"interval"`
+	// MinReservePct and MaxReservePct bound each swap's input as a fraction of the pool's input-side reserve
+	MinReservePct float64 `yaml:"min_reserve_pct"`
+	MaxReservePct float64 `yaml:"max_reserve_pct"`
+}
+
+func (lp *LiquidityPool) GetId() string {
+	return lp.Id
+}
+
+func (lp *LiquidityPool) GetSlippage() float64 {
+	return lp.Slippage
+}
+
+func (lp *LiquidityPool) GetMinReservePct() float64 {
+	return lp.MinReservePct
+}
+
+func (lp *LiquidityPool) GetMaxReservePct() float64 {
+	return lp.MaxReservePct
 }
 
 func (lp *LiquidityPool) Validate() error {
@@ -150,6 +181,10 @@ func (lp *LiquidityPool) Validate() error {
 
 	if lp.Interval <= 0 {
 		return NewConfigError("liquidity_pool interval must be greater than 0")
+	}
+
+	if lp.MinReservePct <= 0 || lp.MinReservePct > lp.MaxReservePct || lp.MaxReservePct > maxReservePctLimit {
+		return NewConfigError(fmt.Sprintf("liquidity_pool reserve pct must satisfy 0 < min_reserve_pct <= max_reserve_pct <= %v", maxReservePctLimit))
 	}
 
 	return nil

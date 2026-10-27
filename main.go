@@ -7,6 +7,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
 	"tradebin-mm/app"
 	"tradebin-mm/app/cache"
 	"tradebin-mm/app/client"
@@ -207,6 +208,16 @@ func startMarketMaking(cfg *config.Config, l logrus.FieldLogger) {
 		log.Fatalf("could not create volume maker: %v", err)
 	}
 
+	haltProvider, err := data_provider.NewHaltProvider(l, grpc)
+	if err != nil {
+		log.Fatalf("could not create halt data provider: %v", err)
+	}
+
+	lpDataProvider, err := data_provider.NewLiquidityPoolProvider(l, grpc)
+	if err != nil {
+		log.Fatalf("could not create liquidity pool data provider: %v", err)
+	}
+
 	orders, err := app.NewOrdersFiller(
 		l,
 		&cfg.Orders,
@@ -215,6 +226,8 @@ func startMarketMaking(cfg *config.Config, l logrus.FieldLogger) {
 		w,
 		orderData,
 		oService,
+		haltProvider,
+		lpDataProvider,
 	)
 
 	if err != nil {
@@ -277,7 +290,12 @@ func startLPVolumeMaking(cfg *config.Config, l logrus.FieldLogger) {
 		log.Fatalf("could not create liquidity pool data provider: %v", err)
 	}
 
-	lpVolumeMaker, err := app.NewLPVolumeMaker(l, lpDataProvider, balances, w, broadcaster, cfg.LiquidityPool.Id, cfg.LiquidityPool.Slippage)
+	haltProvider, err := data_provider.NewHaltProvider(l, grpc)
+	if err != nil {
+		log.Fatalf("could not create halt data provider: %v", err)
+	}
+
+	lpVolumeMaker, err := app.NewLPVolumeMaker(l, lpDataProvider, balances, w, broadcaster, haltProvider, &cfg.LiquidityPool)
 	if err != nil {
 		log.Fatalf("could not create lp volume maker: %v", err)
 	}
