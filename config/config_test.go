@@ -46,6 +46,7 @@ func TestLoadConfig_ReservePctDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.InDelta(t, 0.001, cfg.LiquidityPool.MinReservePct, 1e-12)
 	require.InDelta(t, 0.005, cfg.LiquidityPool.MaxReservePct, 1e-12)
+	require.Equal(t, int64(10_000_000), cfg.LiquidityPool.FeeReserve)
 	require.NoError(t, cfg.LiquidityPool.Validate())
 }
 
@@ -65,13 +66,20 @@ func TestLiquidityPoolValidate_ReservePctBounds(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			lp := config.LiquidityPool{Id: "a_b", Slippage: 0.01, Interval: 30, MinReservePct: c.min, MaxReservePct: c.max}
+			lp := config.LiquidityPool{Id: "a_b", Slippage: 0.01, Interval: 30, MinReservePct: c.min, MaxReservePct: c.max, FeeReserve: 10_000_000}
 			if c.ok {
 				require.NoError(t, lp.Validate())
 			} else {
 				require.Error(t, lp.Validate())
 			}
 		})
+	}
+}
+
+func TestLiquidityPoolValidate_FeeReserveMustBePositive(t *testing.T) {
+	for _, reserve := range []int64{0, -1} {
+		lp := config.LiquidityPool{Id: "a_b", Slippage: 0.01, Interval: 30, MinReservePct: 0.001, MaxReservePct: 0.005, FeeReserve: reserve}
+		require.Error(t, lp.Validate())
 	}
 }
 

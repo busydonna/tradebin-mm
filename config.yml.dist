@@ -38,4 +38,5 @@ liquidity_pool:
     interval: 30 # the number of seconds between swaps
     min_reserve_pct: 0.001 # smallest swap as a fraction of the pool reserve of the input denom
     max_reserve_pct: 0.005 # largest swap as a fraction of the pool reserve of the input denom (max 0.05)
+    fee_reserve: 10000000 # ubze never swapped away; below it the swap is skipped, since fees are paid in ubze (default 10 BZE)
     

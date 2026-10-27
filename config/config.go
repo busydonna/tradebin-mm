@@ -143,6 +143,7 @@ const (
 	defaultMinReservePct = 0.001
 	defaultMaxReservePct = 0.005
 	maxReservePctLimit   = 0.05
+	defaultFeeReserve    = 10_000_000
 )
 
 type LiquidityPool struct {
@@ -152,6 +153,8 @@ type LiquidityPool struct {
 	// MinReservePct and MaxReservePct bound each swap's input as a fraction of the pool's input-side reserve
 	MinReservePct float64 `yaml:"min_reserve_pct"`
 	MaxReservePct float64 `yaml:"max_reserve_pct"`
+	// FeeReserve is the ubze balance (micro-units) never swapped away, so the wallet can always pay fees
+	FeeReserve int64 `yaml:"fee_reserve"`
 }
 
 func (lp *LiquidityPool) GetId() string {
@@ -170,6 +173,10 @@ func (lp *LiquidityPool) GetMaxReservePct() float64 {
 	return lp.MaxReservePct
 }
 
+func (lp *LiquidityPool) GetFeeReserve() int64 {
+	return lp.FeeReserve
+}
+
 func (lp *LiquidityPool) Validate() error {
 	if lp.Id == "" {
 		return NewConfigError("liquidity_pool id is required")
@@ -185,6 +192,10 @@ func (lp *LiquidityPool) Validate() error {
 
 	if lp.MinReservePct <= 0 || lp.MinReservePct > lp.MaxReservePct || lp.MaxReservePct > maxReservePctLimit {
 		return NewConfigError(fmt.Sprintf("liquidity_pool reserve pct must satisfy 0 < min_reserve_pct <= max_reserve_pct <= %v", maxReservePctLimit))
+	}
+
+	if lp.FeeReserve <= 0 {
+		return NewConfigError("liquidity_pool fee_reserve must be greater than 0")
 	}
 
 	return nil

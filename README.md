@@ -23,7 +23,7 @@ Requires a BZE chain on v8.2.0 or later (the bot queries halted denoms).
 
 ### Pool volume (`lp-volume`)
 Each swap goes from the side of the wallet holding more value (valued at the pool spot price), so the inventory stays near 50/50.
-The input is a random share in `[min_reserve_pct, max_reserve_pct]` of the pool reserve of that denom, capped by the wallet balance (300000 ubze always stay for fees). Swaps below 1000 micro-units are skipped. The whole balance is never swapped at once.
+The input is a random share in `[min_reserve_pct, max_reserve_pct]` of the pool reserve of that denom, capped by the wallet balance (`fee_reserve` ubze always stay for fees, and the swap is skipped while the ubze balance is below it, because every swap pays its fees in ubze). Swaps below 1000 micro-units are skipped. The whole balance is never swapped at once.
 
 ### Halted denoms
 At the start of every cycle the bot asks the chain whether the market's or pool's denoms are halted.
@@ -40,6 +40,7 @@ See `config.yml.dist` for every key, and `configs/` for ready-made BZE/USDC.inj 
 | `market.pool_id` | optional; anchors the order book to that pool's spot price and reprices every cycle |
 | `liquidity_pool.min_reserve_pct` | smallest swap as a fraction of the input-side pool reserve (default 0.001) |
 | `liquidity_pool.max_reserve_pct` | largest swap as a fraction of the input-side pool reserve (default 0.005, at most 0.05) |
+| `liquidity_pool.fee_reserve` | ubze (micro-units) never swapped away; swaps are skipped below it (default 10000000 = 10 BZE) |
 
 ### Wallet mnemonic
 Set the `TRADEBIN_MNEMONIC` environment variable to keep the mnemonic out of the config file; it overrides `wallet.mnemonic` when set. Never commit a config file holding a mnemonic (`config.yml` is git-ignored).

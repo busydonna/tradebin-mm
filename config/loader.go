@@ -67,6 +67,10 @@ func addDefaults(cfg *Config) {
 		cfg.LiquidityPool.MaxReservePct = defaultMaxReservePct
 	}
 
+	if cfg.LiquidityPool.FeeReserve == 0 {
+		cfg.LiquidityPool.FeeReserve = defaultFeeReserve
+	}
+
 	if mnemonic := os.Getenv(MnemonicEnv); mnemonic != "" {
 		cfg.Wallet.Mnemonic = mnemonic
 	}
