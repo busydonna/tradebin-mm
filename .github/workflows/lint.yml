@@ -1,0 +1,40 @@
+name: Lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        run: make build
+
+      - name: Vet
+        run: make vet
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+
+      - name: Modules tidy
+        run: make tidy-check
+
+      - name: Vulnerabilities
+        run: make vulncheck
