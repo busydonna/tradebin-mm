@@ -23,7 +23,7 @@ type lpFixture struct {
 func newLPFixture(t *testing.T, coins map[string]int64, minPct, maxPct float64) *lpFixture {
 	t.Helper()
 
-	return newLPFixtureWithFeeReserve(t, coins, minPct, maxPct, 300_000)
+	return newLPFixtureWithFeeReserve(t, coins, minPct, maxPct, 1_000_000)
 }
 
 func newLPFixtureWithFeeReserve(t *testing.T, coins map[string]int64, minPct, maxPct float64, feeReserve int64) *lpFixture {
@@ -72,7 +72,7 @@ func TestLPVolume_SwapIsCappedByReservePctNotWholeBalance(t *testing.T) {
 
 func TestLPVolume_SwapAmountStaysWithinReservePctBounds(t *testing.T) {
 	for i := 0; i < 50; i++ {
-		f := newLPFixture(t, map[string]int64{usdc: 100_000_000, ubze: 300_000}, 0.001, 0.005)
+		f := newLPFixture(t, map[string]int64{usdc: 100_000_000, ubze: 1_000_000}, 0.001, 0.005)
 
 		require.NoError(t, f.maker.MakeVolume())
 
@@ -93,13 +93,13 @@ func TestLPVolume_SwapIsCappedByBalance(t *testing.T) {
 }
 
 func TestLPVolume_UbzeInputKeepsFeeReserve(t *testing.T) {
-	f := newLPFixture(t, map[string]int64{ubze: 1_300_000}, 0.005, 0.005)
+	f := newLPFixture(t, map[string]int64{ubze: 2_000_000}, 0.005, 0.005)
 
 	require.NoError(t, f.maker.MakeVolume())
 
 	msg := f.onlySwap(t)
 	require.Equal(t, ubze, msg.Input.Denom)
-	require.Equal(t, int64(1_000_000), msg.Input.Amount.Int64(), "300000 ubze stay for fees")
+	require.Equal(t, int64(1_000_000), msg.Input.Amount.Int64(), "fee_reserve ubze stay for fees")
 }
 
 func TestLPVolume_UbzeInputKeepsConfiguredFeeReserve(t *testing.T) {
@@ -113,17 +113,27 @@ func TestLPVolume_UbzeInputKeepsConfiguredFeeReserve(t *testing.T) {
 	require.Equal(t, int64(5_000_000), msg.Input.Amount.Int64())
 }
 
-func TestLPVolume_SkipsWhenUbzeBelowFeeReserve(t *testing.T) {
-	// a USDC-side swap still pays its fees in ubze: below the reserve it would only fail on chain
-	f := newLPFixtureWithFeeReserve(t, map[string]int64{usdc: 100_000_000, ubze: 9_999_999}, 0.001, 0.005, 10_000_000)
+func TestLPVolume_SkipsWhenUbzeCannotPayFees(t *testing.T) {
+	// a USDC-side swap still pays its fees in ubze: below 1 BZE it would only fail on chain
+	f := newLPFixtureWithFeeReserve(t, map[string]int64{usdc: 100_000_000, ubze: 999_999}, 0.001, 0.005, 10_000_000)
 
 	require.NoError(t, f.maker.MakeVolume())
 	require.Empty(t, f.broadcaster.sent)
 }
 
-func TestNewLPVolumeMaker_RejectsNonPositiveFeeReserve(t *testing.T) {
+func TestLPVolume_SwapsAfterFeesDipBelowFeeReserve(t *testing.T) {
+	// mainnet state after a balance-capped ubze swap: its fees left the wallet just under fee_reserve
+	f := newLPFixtureWithFeeReserve(t, map[string]int64{usdc: 4_067_048, ubze: 9_842_635}, 0.001, 0.005, 10_000_000)
+
+	require.NoError(t, f.maker.MakeVolume())
+
+	msg := f.onlySwap(t)
+	require.Equal(t, usdc, msg.Input.Denom)
+}
+
+func TestNewLPVolumeMaker_RejectsFeeReserveBelowOneBZE(t *testing.T) {
 	p := pool(1_000_000_000, 3_000_000_000_000)
-	cfg := &config.LiquidityPool{Id: p.Id, Slippage: 0.01, Interval: 30, MinReservePct: 0.001, MaxReservePct: 0.005}
+	cfg := &config.LiquidityPool{Id: p.Id, Slippage: 0.01, Interval: 30, MinReservePct: 0.001, MaxReservePct: 0.005, FeeReserve: 999_999}
 
 	_, err := app.NewLPVolumeMaker(quietLogger(), &fakePools{pool: p}, &fakeBalances{}, fakeAddress{}, &fakeBroadcaster{}, &fakeHalts{}, cfg)
 
@@ -131,7 +141,7 @@ func TestNewLPVolumeMaker_RejectsNonPositiveFeeReserve(t *testing.T) {
 }
 
 func TestLPVolume_SkipsBelowMinimumAmount(t *testing.T) {
-	f := newLPFixture(t, map[string]int64{ubze: 300_999}, 0.005, 0.005)
+	f := newLPFixture(t, map[string]int64{ubze: 1_000_999}, 0.005, 0.005)
 
 	require.NoError(t, f.maker.MakeVolume())
 	require.Empty(t, f.broadcaster.sent)
@@ -164,7 +174,7 @@ func TestLPVolume_HaltedDenomSkipsSwap(t *testing.T) {
 }
 
 func TestLPVolume_HaltRefusalIsNotAnError(t *testing.T) {
-	f := newLPFixture(t, map[string]int64{usdc: 100_000_000, ubze: 300_000}, 0.001, 0.005)
+	f := newLPFixture(t, map[string]int64{usdc: 100_000_000, ubze: 1_000_000}, 0.001, 0.005)
 	f.broadcaster.err = errHaltedOnChain
 
 	require.NoError(t, f.maker.MakeVolume())
@@ -172,7 +182,7 @@ func TestLPVolume_HaltRefusalIsNotAnError(t *testing.T) {
 }
 
 func TestLPVolume_OtherBroadcastErrorsAreReturned(t *testing.T) {
-	f := newLPFixture(t, map[string]int64{usdc: 100_000_000, ubze: 300_000}, 0.001, 0.005)
+	f := newLPFixture(t, map[string]int64{usdc: 100_000_000, ubze: 1_000_000}, 0.001, 0.005)
 	f.broadcaster.err = errors.New("insufficient fees")
 
 	require.Error(t, f.maker.MakeVolume())

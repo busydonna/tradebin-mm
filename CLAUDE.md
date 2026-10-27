@@ -45,7 +45,7 @@ The application uses a layered architecture:
 
 **Action layer** (`app/`):
 - `OrdersFiller` (`orders.go`) — Places symmetric buy/sell orders around the market spread using configurable price steps, amounts, and hold-back intervals. With `market.pool_id` it anchors to the pool spot price and reprices every cycle (cancel off-target, place missing). Halted market denoms → cancel own orders, return `ErrMarketHalted`.
-- `LPVolumeMaker` (`lp_volume.go`) — One `MsgMultiSwap` per interval from the larger-value side, sized at `[min_reserve_pct, max_reserve_pct]` of the input reserve, capped by balance minus `fee_reserve` ubze; skips on halted denoms and while ubze is below `fee_reserve`.
+- `LPVolumeMaker` (`lp_volume.go`) — One `MsgMultiSwap` per interval from the larger-value side, sized at `[min_reserve_pct, max_reserve_pct]` of the input reserve, capped by balance minus `fee_reserve` ubze; skips on halted denoms and while ubze is below 1 BZE (fees are paid in ubze).
 - `VolumeMaker` (`volume.go`) — Executes volume trading with two strategies: **carousel** (random trades against existing orders) and **spread** (trades within order book spread). Supports extra-volume trades every N intervals.
 - `CancelAction` (`cancel.go`) and `WithdrawAction` (`withdraw.go`) — One-shot operations for cleanup.
 

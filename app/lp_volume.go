@@ -17,6 +17,10 @@ import (
 const (
 	ubzeDenom = "ubze"
 
+	// minFeeBalance is the ubze balance below which no swap is attempted: it pays ~6 swaps' fees (gas + swap fee).
+	// It sits below fee_reserve so that the fees of a balance-capped ubze swap don't stall the next swap.
+	minFeeBalance = 1_000_000
+
 	// minSwapAmount is the smallest input (in the input denom's micro-units) worth broadcasting
 	minSwapAmount = 1000
 )
@@ -76,8 +80,8 @@ func NewLPVolumeMaker(
 		return nil, fmt.Errorf("invalid reserve pct bounds")
 	}
 
-	if cfg.GetFeeReserve() <= 0 {
-		return nil, fmt.Errorf("fee reserve must be positive")
+	if cfg.GetFeeReserve() < minFeeBalance {
+		return nil, fmt.Errorf("fee reserve must be at least %d ubze", minFeeBalance)
 	}
 
 	return &LPVolumeMaker{
@@ -125,12 +129,12 @@ func (lv *LPVolumeMaker) MakeVolume() error {
 		return fmt.Errorf("failed to get balances: %w", err)
 	}
 
-	// fees are paid in ubze whichever side is swapped, so a wallet below the reserve would only send failing txs
+	// fees are paid in ubze whichever side is swapped, so a wallet that cannot pay them would only send failing txs
 	ubzeBalance := lv.findBalance(balances, ubzeDenom)
-	if ubzeBalance.LT(lv.feeReserve) {
+	if ubzeBalance.LT(math.NewInt(minFeeBalance)) {
 		l.WithField("ubze", ubzeBalance.String()).
-			WithField("fee_reserve", lv.feeReserve.String()).
-			Warn("ubze balance below fee_reserve, skipping swap")
+			WithField("min_fee_balance", minFeeBalance).
+			Warn("ubze balance too low to pay fees, skipping swap")
 		return nil
 	}
 

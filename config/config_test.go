@@ -76,8 +76,11 @@ func TestLiquidityPoolValidate_ReservePctBounds(t *testing.T) {
 	}
 }
 
-func TestLiquidityPoolValidate_FeeReserveMustBePositive(t *testing.T) {
-	for _, reserve := range []int64{0, -1} {
+func TestLiquidityPoolValidate_FeeReserveAtLeastOneBZE(t *testing.T) {
+	ok := config.LiquidityPool{Id: "a_b", Slippage: 0.01, Interval: 30, MinReservePct: 0.001, MaxReservePct: 0.005, FeeReserve: 1_000_000}
+	require.NoError(t, ok.Validate())
+
+	for _, reserve := range []int64{999_999, 0, -1} {
 		lp := config.LiquidityPool{Id: "a_b", Slippage: 0.01, Interval: 30, MinReservePct: 0.001, MaxReservePct: 0.005, FeeReserve: reserve}
 		require.Error(t, lp.Validate())
 	}
