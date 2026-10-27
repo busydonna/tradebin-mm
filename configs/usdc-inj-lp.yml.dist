@@ -1,0 +1,24 @@
+# BZE/USDC.inj pool volume (action: lp-volume). Run it as a separate process next to the order book one,
+# ideally with its own wallet. Copy to a git-ignored file, set the CHANGE_ME values, export TRADEBIN_MNEMONIC.
+#
+# Pool facts (mainnet, 2026-10-27): reserves ~ 939 USDC.inj / 2.79M BZE, fee 0.1%,
+# price ~ 0.000336 USDC.inj micro per ubze, minimum gas price 0.01 ubze.
+# Each swap moves the price by roughly 2 x the swapped share of the reserve; the caps below keep that small.
+logging:
+    level: "info"
+liquidity_pool:
+    id: "ibc/81DA528F4C5546208D1D50F84C2D0B388B45D37AA36FCA622A3CB2D8EF014838_ubze"
+    slippage: 0.01 # min output = constant-product expectation x (1 - slippage)
+    interval: 60 # CHANGE_ME seconds between swaps
+    min_reserve_pct: 0.001 # CHANGE_ME smallest swap as a share of the input-side reserve (0.1%)
+    max_reserve_pct: 0.005 # CHANGE_ME largest swap as a share of the input-side reserve (0.5%, at most 5%)
+wallet:
+    mnemonic: "" # leave empty and export TRADEBIN_MNEMONIC instead; never commit a mnemonic
+client:
+    grpc: "CHANGE_ME:443" # a BZE mainnet gRPC endpoint
+    tls: true
+transaction:
+    gas_adjustment: 1.3
+    gas_prices: "0.01ubze"
+    chain_id: "beezee-1"
+    address_prefix: "bze"

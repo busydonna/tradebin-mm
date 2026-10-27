@@ -31,6 +31,6 @@ func (s *Sender) Send(from, to sdk.AccAddress, coins sdk.Coins) error {
 	if err != nil {
 		return err
 	}
-	
+
 	return s.b.BroadcastBlock(m)
 }

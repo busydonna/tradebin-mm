@@ -2,7 +2,6 @@ package internal
 
 import (
 	"fmt"
-	"math"
 	"strings"
 
 	sdkMath "cosmossdk.io/math"
@@ -14,25 +13,18 @@ func TrimAmountTrailingZeros(amount string) string {
 	}
 
 	result := strings.TrimRight(amount, "0") // Remove trailing zeros
-	if strings.HasSuffix(result, ".") {
-		result = strings.TrimSuffix(result, ".") // Remove decimal point if no fractional part
-	}
+	result = strings.TrimSuffix(result, ".") // Remove decimal point if no fractional part
 
 	return result
 }
 
+// TruncateToStep rounds num down to the nearest multiple of step (exact decimal math, any step size)
 func TruncateToStep(num, step *sdkMath.LegacyDec) (*sdkMath.LegacyDec, error) {
-	stepFloat := step.MustFloat64()
+	if step == nil || !step.IsPositive() {
+		return nil, fmt.Errorf("step must be positive")
+	}
 
-	stepStr := fmt.Sprintf("%f", stepFloat)
-	stepDecimals := len(strings.Split(strings.TrimRight(stepStr, "0"), ".")[1])
-
-	// Compute the truncation factor based on the numberFloat of decimals in stepFloat
-	factor := math.Pow(10, float64(stepDecimals))
-
-	// Truncate the numberFloat
-	truncated := num.MulInt64(int64(factor)).TruncateDec().QuoInt64(int64(factor))
-	//truncated := math.Trunc(numberFloat*factor) / factor
+	truncated := num.Quo(*step).TruncateDec().Mul(*step)
 
 	return &truncated, nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
 	"tradebin-mm/app/internal"
 
 	authv1beta1 "cosmossdk.io/api/cosmos/auth/v1beta1"
@@ -13,7 +14,6 @@ import (
 	codectypes "github.com/cosmos/cosmos-sdk/codec/types"
 	"github.com/cosmos/cosmos-sdk/crypto/keys/secp256k1"
 	"github.com/cosmos/cosmos-sdk/std"
-	"github.com/cosmos/cosmos-sdk/types"
 	sdk "github.com/cosmos/cosmos-sdk/types"
 	sdkTx "github.com/cosmos/cosmos-sdk/types/tx"
 	"github.com/cosmos/cosmos-sdk/types/tx/signing"
@@ -50,7 +50,7 @@ type clientProvider interface {
 
 type wallet interface {
 	GetPrivateKey() *secp256k1.PrivKey
-	GetAddress() types.AccAddress
+	GetAddress() sdk.AccAddress
 }
 
 type txConfig interface {
@@ -220,13 +220,13 @@ func (o *Broadcaster) Broadcast(msgs []sdk.Msg, mode sdkTx.BroadcastMode) error 
 	}
 	o.l.Debugf("simulated tx: %v", simulate.GasInfo)
 
-	fee, err := getFee(simulate.GasInfo.GasUsed, o.tx.GetGasPrices())
+	gasLimit := float64(simulate.GasInfo.GasUsed) * o.tx.GetGasAdjustment()
+	fee, err := getFee(uint64(gasLimit), o.tx.GetGasPrices())
 	if err != nil {
 		return err
 	}
 	o.l.WithField("fee", fee).Debug("calculated fee")
 
-	gasLimit := float64(simulate.GasInfo.GasUsed) * o.tx.GetGasAdjustment()
 	txBuilder.SetGasLimit(uint64(gasLimit))
 	txBuilder.SetFeeAmount(fee)
 

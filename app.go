@@ -1,9 +1,13 @@
 package main
 
 import (
+	"errors"
 	"fmt"
-	"github.com/sirupsen/logrus"
 	"time"
+
+	"tradebin-mm/app"
+
+	"github.com/sirupsen/logrus"
 )
 
 const (
@@ -46,6 +50,15 @@ func (a *App) execute() {
 	a.l.Debug("executing app...")
 
 	err := a.f.FillOrderBook()
+	if errors.Is(err, app.ErrMarketHalted) {
+		// the filler already warned and cancelled; only log what went wrong besides the halt
+		if err != app.ErrMarketHalted {
+			a.l.WithError(err).Error("error encountered while exiting halted market")
+		}
+
+		return
+	}
+
 	if err != nil {
 		a.l.WithError(err).Errorf("error encountered while filling order book")
 

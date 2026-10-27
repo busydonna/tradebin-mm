@@ -1,0 +1,44 @@
+# BZE/USDC.inj order book market making (action: mm, the default).
+# Copy to a git-ignored file (e.g. config.yml), set the CHANGE_ME values, export TRADEBIN_MNEMONIC.
+#
+# Chain facts (mainnet, 2026-10-27):
+#   - price ~ 0.000336 USDC.inj micro per ubze (prices are quote micro-units per base micro-unit)
+#   - min order amount on this market = ceil(1 / price) x 2 ~ 5954 ubze; keep min_amount well above it
+#   - taker fee 100000 ubze per order that fills on placement, maker fee 1000 ubze per resting order
+#   - minimum gas price 0.01 ubze
+logging:
+    level: "info"
+orders:
+    buy_no: 5 # CHANGE_ME number of buy levels
+    sell_no: 5 # CHANGE_ME number of sell levels
+    step: 0.000001 # CHANGE_ME price distance between levels (0.000001 ~ 0.3% at the current price)
+    spread_steps: 2 # CHANGE_ME steps left empty around the reference price (half on each side)
+    start_price: 0.000336 # only used without pool_id when the book is empty
+    min_amount: 50000000 # CHANGE_ME smallest order, ubze (50 BZE)
+    max_amount: 200000000 # CHANGE_ME largest order, ubze (200 BZE)
+    hold_back_interval: 300 # seconds to wait after a foreign trade before repricing
+market:
+    base_denom: "ubze"
+    quote_denom: "ibc/81DA528F4C5546208D1D50F84C2D0B388B45D37AA36FCA622A3CB2D8EF014838" # USDC.inj
+    # Anchors the ladder to the pool spot price and reprices every cycle. The pool's base is USDC.inj,
+    # the market's base is BZE; the bot converts the orientation.
+    pool_id: "ibc/81DA528F4C5546208D1D50F84C2D0B388B45D37AA36FCA622A3CB2D8EF014838_ubze"
+volume:
+    strategy: "spread" # carousel - trade against book levels; spread - cross a pair inside the spread
+    min: 10000000 # CHANGE_ME smallest volume trade, ubze
+    max: 50000000 # CHANGE_ME largest volume trade, ubze
+    trade_interval: 120 # seconds between volume trades (>= 30); each one pays the taker fee
+    extra_min: 100000000 # CHANGE_ME
+    extra_max: 200000000 # CHANGE_ME
+    extra_every: 5
+    hold_back_interval: 300
+wallet:
+    mnemonic: "" # leave empty and export TRADEBIN_MNEMONIC instead; never commit a mnemonic
+client:
+    grpc: "CHANGE_ME:443" # a BZE mainnet gRPC endpoint
+    tls: true
+transaction:
+    gas_adjustment: 1.3
+    gas_prices: "0.01ubze"
+    chain_id: "beezee-1"
+    address_prefix: "bze"
