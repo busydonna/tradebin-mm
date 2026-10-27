@@ -3,11 +3,13 @@ package data_provider
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
+
 	"github.com/bze-alphateam/bze/x/tradebin/types"
 	"github.com/cosmos/cosmos-sdk/types/query"
 	"github.com/sirupsen/logrus"
-	"sync"
-	"time"
+
 	"tradebin-mm/app/dto"
 	"tradebin-mm/app/internal"
 )

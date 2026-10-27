@@ -2,9 +2,11 @@ package data_provider
 
 import (
 	"context"
+
 	"github.com/bze-alphateam/bze/x/tradebin/types"
 	"github.com/cosmos/cosmos-sdk/types/query"
 	"github.com/sirupsen/logrus"
+
 	"tradebin-mm/app/internal"
 )
 

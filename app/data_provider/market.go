@@ -2,6 +2,7 @@ package data_provider
 
 import (
 	"context"
+
 	"tradebin-mm/app/internal"
 
 	tradebinTypes "github.com/bze-alphateam/bze/x/tradebin/types"

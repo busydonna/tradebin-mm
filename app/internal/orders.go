@@ -40,7 +40,6 @@ func MustRandomInt(min, max *math.Int) math.Int {
 	diff := max.Sub(*min).BigInt()
 
 	// Generate a random big.Int in the range [0, diff]
-	rand.Seed(time.Now().UnixNano())
 	randomBigInt := new(big.Int).Rand(rand.New(rand.NewSource(time.Now().UnixNano())), diff)
 
 	// Add the minimum to the random offset

@@ -2,8 +2,10 @@ package service
 
 import (
 	"fmt"
+
 	tradebinTypes "github.com/bze-alphateam/bze/x/tradebin/types"
 	"github.com/sirupsen/logrus"
+
 	"tradebin-mm/app/internal"
 )
 

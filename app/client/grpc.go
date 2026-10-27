@@ -1,16 +1,18 @@
 package client
 
 import (
-	authv1beta1 "cosmossdk.io/api/cosmos/auth/v1beta1"
-	bankv1beta1 "cosmossdk.io/api/cosmos/bank/v1beta1"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+
+	authv1beta1 "cosmossdk.io/api/cosmos/auth/v1beta1"
+	bankv1beta1 "cosmossdk.io/api/cosmos/bank/v1beta1"
 	tradebinTypes "github.com/bze-alphateam/bze/x/tradebin/types"
 	sdkTx "github.com/cosmos/cosmos-sdk/types/tx"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 const (
@@ -78,13 +80,13 @@ func (c *GrpcClient) getConnection() (*grpc.ClientConn, error) {
 		if err != nil {
 			return nil, err
 		}
-		
+
 		dialOptions = append(dialOptions, grpc.WithTransportCredentials(cred))
 	} else {
-		dialOptions = append(dialOptions, grpc.WithInsecure())
+		dialOptions = append(dialOptions, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 
-	grpcConn, err := grpc.Dial(
+	grpcConn, err := grpc.NewClient(
 		c.host,
 		dialOptions...,
 	)
