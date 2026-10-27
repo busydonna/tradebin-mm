@@ -15,8 +15,11 @@ import (
 )
 
 const (
-	ubzeDenom   = "ubze"
-	ubzeReserve = 300000
+	ubzeDenom = "ubze"
+
+	// minFeeBalance is the ubze balance below which no swap is attempted: it pays ~6 swaps' fees (gas + swap fee).
+	// It sits below fee_reserve so that the fees of a balance-capped ubze swap don't stall the next swap.
+	minFeeBalance = 1_000_000
 
 	// minSwapAmount is the smallest input (in the input denom's micro-units) worth broadcasting
 	minSwapAmount = 1000
@@ -31,6 +34,7 @@ type lpVolumeConfig interface {
 	GetSlippage() float64
 	GetMinReservePct() float64
 	GetMaxReservePct() float64
+	GetFeeReserve() int64
 }
 
 type lpProvider interface {
@@ -52,6 +56,7 @@ type LPVolumeMaker struct {
 	slippage        math.LegacyDec
 	minReservePct   float64
 	maxReservePct   float64
+	feeReserve      math.Int
 }
 
 func NewLPVolumeMaker(
@@ -75,6 +80,10 @@ func NewLPVolumeMaker(
 		return nil, fmt.Errorf("invalid reserve pct bounds")
 	}
 
+	if cfg.GetFeeReserve() < minFeeBalance {
+		return nil, fmt.Errorf("fee reserve must be at least %d ubze", minFeeBalance)
+	}
+
 	return &LPVolumeMaker{
 		logger:          logger.WithField("service", "LPVolumeMaker"),
 		lpProvider:      lpProvider,
@@ -86,6 +95,7 @@ func NewLPVolumeMaker(
 		slippage:        math.LegacyMustNewDecFromStr(fmt.Sprintf("%f", cfg.GetSlippage())),
 		minReservePct:   cfg.GetMinReservePct(),
 		maxReservePct:   cfg.GetMaxReservePct(),
+		feeReserve:      math.NewInt(cfg.GetFeeReserve()),
 	}, nil
 }
 
@@ -117,6 +127,15 @@ func (lv *LPVolumeMaker) MakeVolume() error {
 	balances, err := lv.balanceProvider.GetAddressBalances(lv.addrProvider.GetAddress().String())
 	if err != nil {
 		return fmt.Errorf("failed to get balances: %w", err)
+	}
+
+	// fees are paid in ubze whichever side is swapped, so a wallet that cannot pay them would only send failing txs
+	ubzeBalance := lv.findBalance(balances, ubzeDenom)
+	if ubzeBalance.LT(math.NewInt(minFeeBalance)) {
+		l.WithField("ubze", ubzeBalance.String()).
+			WithField("min_fee_balance", minFeeBalance).
+			Warn("ubze balance too low to pay fees, skipping swap")
+		return nil
 	}
 
 	baseBalance := lv.findBalance(balances, lp.Base)
@@ -230,7 +249,7 @@ func (lv *LPVolumeMaker) spendable(denom string, balance math.Int) math.Int {
 		return balance
 	}
 
-	left := balance.SubRaw(ubzeReserve)
+	left := balance.Sub(lv.feeReserve)
 	if !left.IsPositive() {
 		return math.ZeroInt()
 	}

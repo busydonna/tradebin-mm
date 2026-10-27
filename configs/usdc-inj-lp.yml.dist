@@ -12,6 +12,7 @@ liquidity_pool:
     interval: 60 # CHANGE_ME seconds between swaps
     min_reserve_pct: 0.001 # CHANGE_ME smallest swap as a share of the input-side reserve (0.1%)
     max_reserve_pct: 0.005 # CHANGE_ME largest swap as a share of the input-side reserve (0.5%, at most 5%)
+    fee_reserve: 10000000 # ubze kept for fees; one swap costs ~0.16 BZE (gas + 0.1 BZE swap fee), so 10 BZE covers ~60
 wallet:
     mnemonic: "" # leave empty and export TRADEBIN_MNEMONIC instead; never commit a mnemonic
 client:
